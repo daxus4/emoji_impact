@@ -1,0 +1,3 @@
+emoji>=2.15,<3
+torch>=2.2,<2.7
+transformers>=4.40,<5

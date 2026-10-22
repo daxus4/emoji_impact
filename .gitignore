@@ -1,0 +1,7 @@
+data/
+runs/
+slurm/*.out
+slurm/*.err
+__pycache__/
+*.py[cod]
+.venv/
