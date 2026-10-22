@@ -2,7 +2,7 @@ name: paper-finetuning
 channels:
   - conda-forge
 dependencies:
-  - python=3.11
+  - python=3.13.2
   - pip
   - pip:
       - emoji==2.16.0
