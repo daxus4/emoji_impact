@@ -29,7 +29,7 @@ conda activate paper-finetuning
 python experiment.py --data-dir data --output-dir runs/example_run --condition emoji --action replace --seed 0
 ```
 
-The environment file uses the Python and package versions from the original project's `uv run` environment and has no machine-specific `prefix`. On systems without Conda, install the same pinned Python packages with `pip install -r requirements.txt` in a Python 3.13.2 environment.
+The environment file pins Python 3.13.2, the original project's runtime dependencies, and the NumPy and Hugging Face package versions resolved by `uv run`. It has no machine-specific `prefix`. On systems without Conda, install the same pinned Python packages with `pip install -r requirements.txt` in a Python 3.13.2 environment.
 
 `--seed` controls model initialization, training order, and other random operations. It does not select a dataset. To use another split, point `--data-dir` to another directory containing the same three filenames. The best validation checkpoint is evaluated on `test.tsv`.
 
