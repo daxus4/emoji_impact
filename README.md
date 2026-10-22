@@ -27,14 +27,14 @@ From this directory, create and activate the Conda environment on Linux or Windo
 conda env create -f environment.yml
 conda activate paper-finetuning
 python training.py --data-dir data --output-dir runs/example_run --condition emoji --action replace --seed 0
-python testing.py --test-file data/test.tsv --model-dir runs/example_run --output-dir runs/example_test
+python testing.py --test-file data/test.tsv --model-dir runs/example_run --output-dir runs/example_test_emoji_replace --condition emoji --action replace
 ```
 
 The environment file pins Python 3.13.2, the original project's runtime dependencies, and the NumPy and Hugging Face package versions resolved by `uv run`. It has no machine-specific `prefix`. On systems without Conda, install the same pinned Python packages with `pip install -r requirements.txt` in a Python 3.13.2 environment.
 
 `--seed` controls model initialization, training order, and other random operations. It does not select a dataset. To use another split, point `--data-dir` to another directory containing `train.tsv` and `validation.tsv`. Testing loads the checkpoint with the lowest validation loss from `best.pt`; it never retrains the model. To use an all-emoji test set, pass its TSV path with `--test-file`.
 
-By default, `testing.py` evaluates the same checkpoint on seven input variants: original text, and emoji, word, and emoji plus word ablations with both `remove` and `replace`. Use `--condition emoji --action remove` to evaluate just one variant. It writes `metrics.json`, `metrics.csv`, and `predictions.csv` to the chosen output directory. The reports include MCC, accuracy, macro F1, negative F1, and positive F1. In the prediction CSV, `0` means Bearish/negative and `1` means Bullish/positive; each row includes the scenario, example ID, predicted class, and both class probabilities.
+Each `testing.py` run evaluates exactly one input variant. Choose `--condition original` for unchanged text, or choose `emoji`, `word`, or `emoji_word` together with `--action remove` or `--action replace`. Run the command again with a different output directory for another variant. It writes `metrics.json`, `metrics.csv`, and `predictions.csv` to the chosen output directory. The reports include MCC, accuracy, macro F1, negative F1, and positive F1. In the prediction CSV, `0` means Bearish/negative and `1` means Bullish/positive; each row includes the scenario, example ID, predicted class, and both class probabilities.
 
 ## Processing and training
 

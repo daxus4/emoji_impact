@@ -1,4 +1,4 @@
-"""Evaluate one fine tuned checkpoint on the seven StockTwits input conditions."""
+"""Evaluate one fine tuned checkpoint on one StockTwits input condition."""
 
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ class Settings:
     test_file: Path
     model_dir: Path
     output_dir: Path
-    condition: str = "all"
-    action: str = "both"
+    condition: str
+    action: str | None = None
     batch_size: int = 32
     num_workers: int = 4
 
@@ -42,38 +42,29 @@ class Scenario:
     condition: str
     action: str | None = None
 
-    @property
-    def name(self) -> str:
-        return self.condition if self.action is None else f"{self.condition}_{self.action}"
-
 
 def parse_args() -> Settings:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-file", required=True, type=Path)
     parser.add_argument("--model-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--condition", choices=("all", "original", *CONDITIONS), default="all")
-    parser.add_argument("--action", choices=("both", *ACTIONS), default="both")
+    parser.add_argument("--condition", choices=("original", *CONDITIONS), required=True)
+    parser.add_argument("--action", choices=ACTIONS)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--num-workers", type=int, default=4)
     settings = Settings(**vars(parser.parse_args()))
     if settings.batch_size < 1 or settings.num_workers < 0:
         parser.error("Batch size must be positive and worker count nonnegative")
+    if settings.condition == "original" and settings.action is not None:
+        parser.error("--action does not apply to the original condition")
+    if settings.condition != "original" and settings.action is None:
+        parser.error("--action is required for emoji and word ablations")
     if not settings.test_file.is_file():
         parser.error(f"Test file does not exist: {settings.test_file}")
     for filename in ("settings.json", "config.json", "best.pt"):
         if not (settings.model_dir / filename).is_file():
             parser.error(f"Trained model is missing {filename}: {settings.model_dir}")
     return settings
-
-
-def selected_scenarios(settings: Settings) -> tuple[Scenario, ...]:
-    if settings.condition == "original":
-        return (Scenario("original"),)
-    conditions = CONDITIONS if settings.condition == "all" else (settings.condition,)
-    actions = ACTIONS if settings.action == "both" else (settings.action,)
-    ablations = tuple(Scenario(condition, action) for condition in conditions for action in actions)
-    return (Scenario("original"), *ablations) if settings.condition == "all" else ablations
 
 
 def load_model(model_dir: Path, device: torch.device) -> torch.nn.Module:
@@ -141,12 +132,12 @@ class Evaluator:
         }
 
 
-def write_reports(output_dir: Path, results: dict[str, dict[str, float | int | str]]) -> None:
-    (output_dir / "metrics.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+def write_reports(output_dir: Path, result: dict[str, float | int | str]) -> None:
+    (output_dir / "metrics.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     with (output_dir / "metrics.csv").open("w", newline="", encoding="utf-8") as target:
         writer = csv.DictWriter(target, fieldnames=METRIC_COLUMNS)
         writer.writeheader()
-        writer.writerows(results.values())
+        writer.writerow(result)
 
 
 def main() -> None:
@@ -158,23 +149,22 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(settings.model_dir, local_files_only=True)
     model = load_model(settings.model_dir, device)
     words = load_sentiment_words(Path(__file__).with_name("combined_sentiment_words.txt"))
-    results: dict[str, dict[str, float | int | str]] = {}
+    scenario = Scenario(settings.condition, settings.action)
+    spec = TransformSpec(scenario.condition, scenario.action or "replace", words)
+    dataset = MessageDataset(settings.test_file, spec)
+    loader = DataLoader(
+        dataset,
+        batch_size=settings.batch_size,
+        num_workers=settings.num_workers,
+        collate_fn=make_collator(tokenizer, max_length),
+    )
     with (settings.output_dir / "predictions.csv").open("w", newline="", encoding="utf-8") as target:
         writer = csv.writer(target)
         writer.writerow(PREDICTION_COLUMNS)
         evaluator = Evaluator(model, device, writer)
-        for scenario in selected_scenarios(settings):
-            spec = TransformSpec(scenario.condition, scenario.action or "replace", words)
-            dataset = MessageDataset(settings.test_file, spec)
-            loader = DataLoader(
-                dataset,
-                batch_size=settings.batch_size,
-                num_workers=settings.num_workers,
-                collate_fn=make_collator(tokenizer, max_length),
-            )
-            results[scenario.name] = evaluator.evaluate(scenario, loader)
-            print(json.dumps(results[scenario.name]), flush=True)
-    write_reports(settings.output_dir, results)
+        result = evaluator.evaluate(scenario, loader)
+    write_reports(settings.output_dir, result)
+    print(json.dumps(result), flush=True)
 
 
 if __name__ == "__main__":
