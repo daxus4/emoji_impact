@@ -1,4 +1,4 @@
-"""Fine tune and evaluate the four StockTwits ablation conditions."""
+"""Fine tune a StockTwits sentiment classifier for one input condition."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from preprocessing import TransformSpec, load_sentiment_words, normalize_stocktw
 
 MODEL_NAME = "cardiffnlp/twitter-roberta-base-sentiment"
 LABEL_TO_ID = {"bearish": 0, "bullish": 1}
-SPLITS = ("train", "validation", "test")
+SPLITS = ("train", "validation")
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,7 @@ class Settings:
     learning_rate: float = 5e-5
     weight_decay: float = 0.01
     patience: int = 5
+    early_stopping_min_delta: float = 0.001
     num_workers: int = 4
 
 
@@ -57,18 +58,20 @@ def parse_args() -> Settings:
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--early-stopping-min-delta", type=float, default=0.001)
     parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args()
     settings = Settings(**vars(args))
     if settings.batch_size < 1 or settings.max_epochs < 1 or settings.patience < 1:
         parser.error("Batch size, epoch count, and patience must be positive")
+    if not math.isfinite(settings.early_stopping_min_delta) or settings.early_stopping_min_delta < 0:
+        parser.error("Early stopping min delta must be finite and nonnegative")
     return settings
 
 
 class MessageDataset(Dataset):
-    def __init__(self, path: Path, settings: Settings, words: frozenset[str]) -> None:
+    def __init__(self, path: Path, transform_spec: TransformSpec) -> None:
         self.examples: list[tuple[str, int, str]] = []
-        transform_spec = TransformSpec(settings.condition, settings.action, words)
         with path.open(encoding="utf-8", newline="") as source:
             reader = csv.DictReader(source, delimiter="\t")
             if not reader.fieldnames:
@@ -196,7 +199,7 @@ def train(model: torch.nn.Module, loaders: dict[str, DataLoader], settings: Sett
                 model.train()
 
         current_loss = validation_loss(model, loaders["validation"], device)
-        improved = current_loss < best_loss
+        improved = best_loss - current_loss > settings.early_stopping_min_delta
         if improved:
             best_loss = current_loss
             bad_epochs = 0
@@ -219,45 +222,6 @@ def train(model: torch.nn.Module, loaders: dict[str, DataLoader], settings: Sett
                 break
 
 
-def summarize_predictions(labels: list[int], predictions: list[int]) -> dict[str, float]:
-    results: dict[str, float] = {"accuracy": sum(a == b for a, b in zip(labels, predictions)) / len(labels)}
-    class_f1 = []
-    for class_id, name in enumerate(("negative", "positive")):
-        true_positives = sum(y == class_id and p == class_id for y, p in zip(labels, predictions))
-        predicted = sum(p == class_id for p in predictions)
-        actual = sum(y == class_id for y in labels)
-        precision = true_positives / predicted if predicted else 0.0
-        recall = true_positives / actual if actual else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-        results[f"{name}_precision"] = precision
-        results[f"{name}_recall"] = recall
-        results[f"{name}_f1"] = f1
-        class_f1.append(f1)
-    results["macro_f1"] = sum(class_f1) / len(class_f1)
-    return results
-
-
-def evaluate(model: torch.nn.Module, loader: DataLoader, device: torch.device, output: Path) -> dict[str, float]:
-    model.eval()
-    labels: list[int] = []
-    predictions: list[int] = []
-    with output.open("w", newline="", encoding="utf-8") as target:
-        writer = csv.writer(target)
-        writer.writerow(("example_id", "label", "prediction", "negative_probability", "positive_probability"))
-        with torch.no_grad():
-            for batch in loader:
-                inputs = batch_to_device(batch, device)
-                expected = inputs.pop("labels")
-                probabilities = model(**inputs).logits.softmax(dim=-1).cpu()
-                predicted = probabilities.argmax(dim=-1).tolist()
-                true_labels = expected.cpu().tolist()
-                labels.extend(true_labels)
-                predictions.extend(predicted)
-                for example_id, label, prediction, probability in zip(batch["example_ids"], true_labels, predicted, probabilities.tolist()):
-                    writer.writerow((example_id, label, prediction, *probability))
-    return summarize_predictions(labels, predictions)
-
-
 def main() -> None:
     settings = parse_args()
     settings.output_dir.mkdir(parents=True, exist_ok=True)
@@ -266,23 +230,21 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(settings.seed)
     words = load_sentiment_words(Path(__file__).with_name("combined_sentiment_words.txt"))
-    datasets = {name: MessageDataset(settings.data_dir / f"{name}.tsv", settings, words) for name in SPLITS}
+    transform_spec = TransformSpec(settings.condition, settings.action, words)
+    datasets = {name: MessageDataset(settings.data_dir / f"{name}.tsv", transform_spec) for name in SPLITS}
     tokenizer = AutoTokenizer.from_pretrained(settings.model_name)
+    tokenizer.save_pretrained(settings.output_dir)
     loaders = {name: make_loader(dataset, settings, tokenizer, name == "train") for name, dataset in datasets.items()}
     model = AutoModelForSequenceClassification.from_pretrained(
         settings.model_name, num_labels=2, ignore_mismatched_sizes=True
     )
+    model.config.save_pretrained(settings.output_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     (settings.output_dir / "settings.json").write_text(
         json.dumps({**asdict(settings), "data_dir": str(settings.data_dir), "output_dir": str(settings.output_dir)}, indent=2) + "\n",
         encoding="utf-8",
     )
     train(model, loaders, settings, device)
-    model.load_state_dict(torch.load(settings.output_dir / "best.pt", map_location="cpu", weights_only=True))
-    model.to(device)
-    metrics = {"test": evaluate(model, loaders["test"], device, settings.output_dir / "test_predictions.csv")}
-    (settings.output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(metrics, indent=2), flush=True)
 
 
 if __name__ == "__main__":
