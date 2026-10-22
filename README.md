@@ -21,12 +21,15 @@ Pass the directory with `--data-dir`. The program reads the three files as suppl
 
 ## Run
 
-From this directory, in a Python 3.10+ environment:
+From this directory, create and activate the Conda environment on Linux or Windows:
 
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate paper-finetuning
 python experiment.py --data-dir data --output-dir runs/example_run --condition emoji --action replace --seed 0
 ```
+
+The environment file has no machine-specific `prefix`. On systems without Conda, install the same pinned Python packages with `pip install -r requirements.txt` in a Python 3.11 environment.
 
 `--seed` controls model initialization, training order, and other random operations. It does not select a dataset. To use another split, point `--data-dir` to another directory containing the same three filenames. The best validation checkpoint is evaluated on `test.tsv`.
 

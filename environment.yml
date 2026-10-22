@@ -1,0 +1,10 @@
+name: paper-finetuning
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - emoji==2.16.0
+      - torch==2.6.0
+      - transformers==4.57.6
